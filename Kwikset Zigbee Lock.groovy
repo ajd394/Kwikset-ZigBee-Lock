@@ -1,42 +1,28 @@
-/*
- * Capabilities
- * - Battery
- * - Configuration
- * - Refresh
- * - Switch
- * - Valve
-*/
-
 metadata {
 	// Automatically generated. Make future change here.
-	definition (name: "KwikSet Zigbee Lock", namespace: "sebirdman", author: "Stephen Bird") {
-        capability "Polling"
+	definition (name: "Kwikset Zigbee Lock", namespace: "ajd394", author: "Andrew DiPrinzio") {
+		capability "Polling"
 		capability "Actuator"
 		capability "Lock"
 		capability "Refresh"
-        capability "Temperature Measurement"
+		capability "Temperature Measurement"
 		capability "Lock Codes"
-		capability "Battery"
-        capability "Alarm"
 
-		// blank clusters? - 0B05,0020
-		fingerprint profileId: "0104", inClusters: "0000,0001,0003,0004,0005,0009,0101,0402,FDBD", outClusters: "000A,0019"
+		fingerprint profileId: "0104", inClusters: "0000,0003,0004,0005,0101", outClusters: "000A,0019"
 	}
 
 	// UI tile definitions
 	tiles {
 		standardTile("lock", "device.lock", width: 2, height: 2, canChangeIcon: true) {
-			state "locked", label: 'locked', action: "lock.unlock", icon: "st.locks.lock.locked", backgroundColor:"#79b821"
-			state "unlocked", label: 'unlocked', action: "lock.lock", icon: "st.locks.lock.unlocked", backgroundColor:"#ffa81e"
+			state "locked", label: '${name}', action: "lock.unlock", icon: "st.locks.lock.locked", backgroundColor:"#79b821", nextState:"unlocking"
+			state "unlocked", label: '${name}', action: "lock.lock", icon: "st.locks.lock.unlocked", backgroundColor:"#ffa81e", nextState:"locking"
+			state "locking", label: '${name}', action: "lock.unlock", icon: "st.locks.lock.locked", backgroundColor:"#79b821", nextState:"unlocking"
+			state "unlocking", label: '${name}', action: "lock.lock", icon: "st.locks.lock.unlocked", backgroundColor:"#ffa81e", nextState:"locking"
 		}
 		standardTile("refresh", "device.lock", inactiveLabel: false, decoration: "flat") {
 			state "default", label:'', action:"refresh.refresh", icon:"st.secondary.refresh"
 		}
-        standardTile("alarm", "device.alarm") {
-			state "off", label:'off', action:'alarm.siren', icon:"st.alarm.alarm.alarm", backgroundColor:"#ffffff"
-			state "siren", label:'alarm!', action:'alarm.off', icon:"st.alarm.alarm.alarm", backgroundColor:"#e86d13"
-		}
-        valueTile("temperature", "device.temperature") {
+		valueTile("temperature", "device.temperature") {
 			state("temperature", label:'${currentValue}°', unit:"F",
 				backgroundColors:[
 					[value: 31, color: "#153591"],
@@ -49,96 +35,77 @@ metadata {
 				]
 			)
 		}
-        valueTile("battery", "device.battery", decoration: "flat", inactiveLabel: false) {
-			state "battery", label:'${currentValue}% battery'
-		}
 		main(["lock"])
-		details(["lock", "refresh", "temperature", "battery"])
+		details(["lock", "refresh", "temperature"])
 	}
 }
 
 // Parse incoming device messages to generate events
 def parse(String description) {
 	log.info description
-   
-    Map map = [:]
-    if (description?.startsWith('catchall:')) {
+
+	Map map = [:]
+	if (description?.startsWith('catchall:')) {
 		map = parseCatchAllMessage(description)
 	} else if (description?.startsWith('read attr -')) {
 		map = parseReportAttributeMessage(description)
 	}
-    log.debug "Parse returned $map"
+	log.debug "Parse returned $map"
 	def result = map ? createEvent(map) : null
-    
-    
-    return result
+
+
+	return result
 }
 
 // Commands to device
 
 def lock() {
-	sendEvent(name: "lock", value: "locked")
-	"st cmd 0x${device.deviceNetworkId} 2 0x0101 0 {}"
+	sendEvent(name: "lock", value: "locking")
+	"st cmd 0x${device.deviceNetworkId} 2 0x${clust.LOCK} 0 {}"
 }
 
 def unlock() {
 	sendEvent(name: "lock", value: "unlocked")
-	"st cmd 0x${device.deviceNetworkId} 2 0x0101 1 {}"
-}
-
-def siren () {
-	sendEvent(name: "alarm", value: "alarm!")
-
-	log.debug "turning alarm on"
-	"st cmd 0x${device.deviceNetworkId} 2 0x0009 2 {}"
+	"st cmd 0x${device.deviceNetworkId} 2 0x${clust.LOCK} 1 {}"
 }
 
 def poll() {
 	log.debug "polling"
-    return refresh()
-    
+	return refresh()
+
 }
-
-def off () {
-	sendEvent(name: "alarm", value: "off")
-
-	log.debug "turning alarm off"
-   	"st cmd 0x${device.deviceNetworkId} 2 0x0009 0 {}"
-}
-
 
 def refresh() {
 	log.debug "sending refresh command"
-    [
-    	"st rattr 0x${device.deviceNetworkId} 2 0x0001 0x0020", "delay 200",
-    	"st rattr 0x${device.deviceNetworkId} 2 0x0101 0", "delay 200",
-    	"st rattr 0x${device.deviceNetworkId} 2 0x0402 0", "delay 200",
-        "st rattr 0x${device.deviceNetworkId} 2 0x0009 0"
-    ]
+	//REMOVE debug only
+	configure()
+	[
+		"st rattr 0x${zigbee.deviceNetworkId} 0x${zigbee.endpointId} 0x${clust.BASIC} 4", "delay 200",
+		"st rattr 0x${zigbee.deviceNetworkId} 0x${zigbee.endpointId} 0x${clust.BASIC} 5", "delay 200",
+		"st rattr 0x${device.deviceNetworkId} 2 0x${clust.LOCK} 0x0000", "delay 200",
+		"st rattr 0x${device.deviceNetworkId} 2 0x${clust.BASIC} 0x0000",
+	]
 }
 
 def configure() {
-	log.debug "binding"
-	//String zigbeeId = swapEndianHex(device.zigbeeId)
-	log.debug "Confuguring Reporting, IAS CIE, and Bindings."
+	String zigbeeId = swapEndianHex(device.zigbeeId)
+	log.debug "Confuguring Reporting, and Bindings."
 	def configCmds = [
-    	//"zcl global write 0x500 0x10 0xf0 {${zigbeeId}}", "delay 200",
+		//lock
+		"zcl global send-me-a-report 0x${clust.LOCK} 0x0000 0x${types.ENUM8} 5 3600 {}", "delay 200",
+		"send 0x${device.deviceNetworkId} 1 2", "delay 1500",
+
+		//TEMP
+		//"zcl global send-me-a-report 0x${clust.TEMP} 0x0000 0x${types.INT16S} 300 3600 {6400}", "delay 200",
 		//"send 0x${device.deviceNetworkId} 1 1", "delay 1500",
-        
-        "zcl global send-me-a-report 1 0x20 0x20 300 3600 {01}", "delay 200",
-        "send 0x${device.deviceNetworkId} 1 1", "delay 1500",
-        
-        "zcl global send-me-a-report 0x402 0 0x29 300 3600 {6400}", "delay 200",
-        "send 0x${device.deviceNetworkId} 1 1", "delay 1500",
-        
-        
-		"zdo bind 0x${device.deviceNetworkId} 1 1 0x402 {${device.zigbeeId}} {}", "delay 200",
-		"zdo bind 0x${device.deviceNetworkId} 1 1 0x001 {${device.zigbeeId}} {}", "delay 1500",
-        
-        "raw 0x500 {01 23 00 00 00}", "delay 200",
-        "send 0x${device.deviceNetworkId} 1 1", "delay 1500",
+
+		//bind
+		"zdo bind 0x${device.deviceNetworkId} 1 2 0x${clust.LOCK} {${device.zigbeeId}} {}", "delay 200",
+		//"zdo bind 0x${device.deviceNetworkId} 1 1 0x${clust.TEMP} {${device.zigbeeId}} {}", "delay 200",
+
 	]
-    return configCmds + refresh() // send refresh cmds as part of config
+	//return configCmds + refresh() // send refresh cmds as part of config
+    return configCmds
 }
 
 private Map parseReportAttributeMessage(String description) {
@@ -147,15 +114,13 @@ private Map parseReportAttributeMessage(String description) {
 		map += [(nameAndValue[0].trim()):nameAndValue[1].trim()]
 	}
 	log.debug "Desc Map: $descMap"
- 
+
 	Map resultMap = [:]
 	if (descMap.cluster == "0101" && descMap.attrId == "0000") {
 		def value = getLockStatus(descMap.value)
-		resultMap = getLockResult(value)
-	} else if (descMap.cluster == "0001") {
-		resultMap = getBatteryResult(Integer.parseInt(descMap.value, 16))
+		resultMap = [name: "lock", value: value]
 	}
- 
+
 	return resultMap
 }
 
@@ -169,73 +134,41 @@ def getLockStatus(value) {
 
 }
 
-private Map getLockResult(value) {
-	log.debug 'LOCK'
-	def descriptionText = "Lock is ${value}"
-	return [
-		name: 'lock',
-		value: value,
-		descriptionText: descriptionText
-	]
-}
-
 private Map parseCatchAllMessage(String description) {
-    Map resultMap = [:]
-    def cluster = zigbee.parse(description)
-    if (shouldProcessMessage(cluster)) {
-        switch(cluster.clusterId) {
-            case 0x0001:
-            	resultMap = getBatteryResult(cluster.data.last())
-                break
-
-            case 0x0402:
-                // temp is last 2 data values. reverse to swap endian
-                String temp = cluster.data[-2..-1].reverse().collect { cluster.hex1(it) }.join()
-                def value = getTemperature(temp)
-                resultMap = getTemperatureResult(value)
-                break
-
+	Map resultMap = [:]
+	def msg = zigbee.parse(description)
+	log.debug "msg ${msg}"
+	if (shouldProcessMessage(msg)) {
+		switch(msg.clusterId) {
+			/*case 0x0402:
+				// temp is last 2 data values. reverse to swap endian
+				String temp = msg.data[-2..-1].reverse().collect { msg.hex1(it) }.join()
+				def value = getTemperature(temp)
+				resultMap = getTemperatureResult(value)
+				break
+				*/
 			case 0x0101:
-            	log.debug 'lock unknown data'
-                break
-        }
-    }
-
-    return resultMap
-}
-
-private Map getBatteryResult(rawValue) {
-	log.debug 'Battery'
-	def linkText = getLinkText(device)
-    
-    def result = [
-    	name: 'battery'
-    ]
-    
-	def volts = rawValue / 10
-	def descriptionText
-	if (volts > 6.5) {
-		result.descriptionText = "${linkText} battery has too much power (${volts} volts)."
+				if(msg.command == 0x00){
+						if(msg.data[0]== 0x00){
+							resultMap = [name: "lock", value: 'locked']
+						}
+				}else {
+					log.debug 'lock unknown data'
+				}
+				break
+		}
 	}
-	else {
-		def minVolts = 4.0
-    	def maxVolts = 6.0
-		def pct = (volts - minVolts) / (maxVolts - minVolts)
-		result.value = Math.min(100, (int) pct * 100)
-		result.descriptionText = "${linkText} battery was ${result.value}%"
-	}
-
-	return result
+	return resultMap
 }
 
 private boolean shouldProcessMessage(cluster) {
-    // 0x0B is default response indicating message got through
-    // 0x07 is bind message
-    boolean ignoredMessage = cluster.profileId != 0x0104 || 
-        cluster.command == 0x0B ||
-        cluster.command == 0x07 ||
-        (cluster.data.size() > 0 && cluster.data.first() == 0x3e)
-    return !ignoredMessage
+	// 0x0B is default response indicating message got through
+	// 0x07 is bind message
+	boolean ignoredMessage = cluster.profileId != 0x0104 ||
+		cluster.command == 0x0B ||
+		cluster.command == 0x07 ||
+		(cluster.data.size() > 0 && cluster.data.first() == 0x3e)
+	return !ignoredMessage
 }
 
 def getTemperature(value) {
@@ -247,7 +180,13 @@ def getTemperature(value) {
 	}
 }
 
+def uninstalled() {
 
+	log.debug "uninstalled()"
+
+	response("zcl rftd")
+
+}
 
 private Map getTemperatureResult(value) {
 	log.debug 'TEMP'
@@ -265,7 +204,43 @@ private Map getTemperatureResult(value) {
 	]
 }
 
-
 private String swapEndianHex(String hex) {
-    reverseArray(hex.decodeHex()).encodeHex()
+	reverseArray(hex.decodeHex()).encodeHex()
+}
+
+private byte[] reverseArray(byte[] array) {
+    int i = 0;
+    int j = array.length - 1;
+    byte tmp;
+    while (j > i) {
+        tmp = array[j];
+        array[j] = array[i];
+        array[i] = tmp;
+        j--;
+        i++;
+    }
+    return array
+}
+
+private getTypes(){
+	[
+		INT8U: "20",
+		INT16U: "21",
+		INT8S: "28",
+		INT16S: "29",
+		ENUM8:"30"
+	]
+}
+
+private getClust(){
+	[
+		BASIC:"0000",
+		PWRCFG:"0001",
+		IDENTIY:"0003",
+		GROUPS: "0004",
+		SCENES: "0005",
+		ALARMS: "0009",
+		LOCK: "0101",
+		TEMP: "0402"
+	]
 }
